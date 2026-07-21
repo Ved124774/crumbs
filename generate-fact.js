@@ -1,7 +1,6 @@
 const fs = require('fs');
 
 const HISTORY_FILE = 'history.json';
-const MAX_HISTORY = 60; // remembers roughly the last 2 months to avoid repeats
 
 function loadHistory() {
   if (fs.existsSync(HISTORY_FILE)) {
@@ -67,7 +66,7 @@ async function main() {
 
   fs.writeFileSync('fact.json', JSON.stringify({ text: fact, date: today }, null, 2));
 
-  const updatedHistory = [...history, fact].slice(-MAX_HISTORY);
+  const updatedHistory = [...history, fact];
   fs.writeFileSync(HISTORY_FILE, JSON.stringify(updatedHistory, null, 2));
 
   console.log("Wrote fact for", today, ":", fact);
