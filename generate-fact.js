@@ -14,7 +14,13 @@ function loadHistory() {
 }
 
 function buildPrompt(history) {
-  let prompt = "Give me one short, surprising, true fun fact suitable for a general audience aged 7 and up. Just the fact itself, one or two sentences, no preamble.";
+  let prompt = "Give me one short, surprising, true fun fact suitable for a general audience aged 7 and up. " +
+    "Requirements: one or two sentences only, plain text with no markdown and no surrounding quotation marks. " +
+    "Use metric units (kilograms, metres, kilometres, Celsius) rather than imperial units. " +
+    "Do not use em dashes; use commas or separate sentences instead. " +
+    "Do not use exclamation marks; keep the tone calm and matter-of-fact. " +
+    "State the fact plainly and confidently; do not use hedging phrases like 'scientists believe' or 'some say'. " +
+    "Avoid anything violent, disturbing, or scary.";
   if (history.length > 0) {
     prompt += " Do not repeat or closely resemble any of these facts already used recently: " + history.map(h => `"${h}"`).join(", ") + ".";
   }
