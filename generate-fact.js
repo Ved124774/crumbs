@@ -2,6 +2,11 @@ const fs = require('fs');
 
 const HISTORY_FILE = 'history.json';
 
+const CATEGORIES = [
+  "science", "history", "space", "animals", "geography",
+  "the human body", "technology", "the ocean", "ancient civilizations", "language and words"
+];
+
 function loadHistory() {
   if (fs.existsSync(HISTORY_FILE)) {
     try {
@@ -13,14 +18,21 @@ function loadHistory() {
   return [];
 }
 
-function buildPrompt(history) {
-  let prompt = "Give me one short, surprising, true fun fact suitable for a general audience aged 7 and up. " +
-    "Requirements: one or two sentences only, plain text with no markdown and no surrounding quotation marks. " +
+function pickCategory() {
+  const dayIndex = Math.floor(Date.now() / 86400000);
+  return CATEGORIES[dayIndex % CATEGORIES.length];
+}
+
+function buildPrompt(history, category) {
+  let prompt = `Give me one short, well-documented, true fact from the category of ${category}, suitable for a general audience aged 7 and up. ` +
+    "Prioritize accuracy over novelty: prefer facts that are widely verified and well-established over obscure or 'surprising' claims that are hard to confirm, since surprising claims are the ones most likely to be exaggerated or wrong. Use Google Search to verify the fact is correct before answering. " +
+    "Fact requirements: one or two sentences, plain text with no markdown and no surrounding quotation marks. " +
     "Use metric units (kilograms, metres, kilometres, Celsius) rather than imperial units. " +
     "Do not use em dashes; use commas or separate sentences instead. " +
-    "Do not use exclamation marks; keep the tone calm and matter-of-fact. " +
+    "Do not use exclamation marks in the fact; keep its tone calm and matter-of-fact. " +
     "State the fact plainly and confidently; do not use hedging phrases like 'scientists believe' or 'some say'. " +
-    "Avoid anything violent, disturbing, or scary.";
+    "Avoid anything violent, disturbing, or scary. " +
+    "Also write a short push notification teaser for this fact: playful and curious in tone (unlike the calm fact itself), under 90 characters, that hints at the fact without revealing the actual answer or detail, to make someone curious enough to open the app. It may include one relevant emoji if it fits naturally, but don't force one.";
   if (history.length > 0) {
     prompt += " Do not repeat or closely resemble any of these facts already used recently: " + history.map(h => `"${h}"`).join(", ") + ".";
   }
@@ -35,7 +47,19 @@ async function callGeminiOnce(apiKey, prompt) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 1.2 }
+        tools: [{ google_search: {} }],
+        generationConfig: {
+          temperature: 1.1,
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: "object",
+            properties: {
+              fact: { type: "string" },
+              notification: { type: "string" }
+            },
+            required: ["fact", "notification"]
+          }
+        }
       })
     }
   );
@@ -46,7 +70,12 @@ async function callGeminiOnce(apiKey, prompt) {
   if (!data.candidates || !data.candidates[0] || !data.candidates[0].content) {
     throw new Error("No usable candidate in response: " + JSON.stringify(data));
   }
-  return data.candidates[0].content.parts[0].text.trim();
+  const rawText = data.candidates[0].content.parts[0].text.trim();
+  const parsed = JSON.parse(rawText);
+  if (!parsed.fact || !parsed.notification) {
+    throw new Error("Response missing required fields: " + rawText);
+  }
+  return parsed;
 }
 
 async function callGeminiWithRetries(apiKey, prompt, maxAttempts = 3) {
@@ -66,16 +95,22 @@ async function main() {
   if (!apiKey) throw new Error("GEMINI_API_KEY is missing.");
 
   const history = loadHistory();
-  const prompt = buildPrompt(history);
-  const fact = await callGeminiWithRetries(apiKey, prompt);
+  const category = pickCategory();
+  const prompt = buildPrompt(history, category);
+  const result = await callGeminiWithRetries(apiKey, prompt);
   const today = new Date().toISOString().slice(0, 10);
 
-  fs.writeFileSync('fact.json', JSON.stringify({ text: fact, date: today }, null, 2));
+  fs.writeFileSync('fact.json', JSON.stringify({
+    text: result.fact,
+    notification: result.notification,
+    date: today
+  }, null, 2));
 
-  const updatedHistory = [...history, fact];
+  const updatedHistory = [...history, result.fact];
   fs.writeFileSync(HISTORY_FILE, JSON.stringify(updatedHistory, null, 2));
 
-  console.log("Wrote fact for", today, ":", fact);
+  console.log("Wrote fact for", today, ":", result.fact);
+  console.log("Notification:", result.notification);
 }
 
 main().catch(err => {
