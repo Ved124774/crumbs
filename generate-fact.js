@@ -39,30 +39,18 @@ function buildPrompt(history, category) {
   return prompt;
 }
 
-async function callGeminiOnce(apiKey, prompt) {
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        tools: [{ google_search: {} }],
-        generationConfig: {
-          temperature: 1.1,
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: "object",
-            properties: {
-              fact: { type: "string" },
-              notification: { type: "string" }
-            },
-            required: ["fact", "notification"]
-          }
-        }
-      })
+async function callGeminiWithRetries(apiKey, prompt, maxAttempts = 3) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await callGeminiOnce(apiKey, prompt);
+    } catch (err) {
+      const isQuotaError = err.message.includes("429") || err.message.includes("quota");
+      console.log(`Attempt ${attempt} failed: ${err.message}`);
+      if (isQuotaError || attempt === maxAttempts) throw err;
+      await new Promise(r => setTimeout(r, 5000 * attempt));
     }
-  );
+  }
+}
   const data = await res.json();
   if (!res.ok || data.error) {
     throw new Error(`Gemini API error (status ${res.status}): ${data.error ? data.error.message : JSON.stringify(data)}`);
