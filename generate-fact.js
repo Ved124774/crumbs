@@ -24,8 +24,10 @@ function pickCategory() {
 }
 
 function buildPrompt(history, category) {
-  let prompt = `Give me one short, well-documented, true fact from the category of ${category}, suitable for a general audience aged 7 and up. ` +
-    "Prioritize accuracy over novelty: prefer facts that are widely verified and well-established over obscure or 'surprising' claims that are hard to confirm, since surprising claims are the ones most likely to be exaggerated or wrong. Use Google Search to verify the fact is correct before answering. " +
+  let prompt = `Give me one short, true fact from the category of ${category}, suitable for a general audience aged 7 and up. ` +
+    "Accuracy matters more than anything else here. Only choose a fact you are highly confident is correct, well-established, and would appear consistently across reputable reference sources, such as an encyclopedia or textbook. " +
+    "Avoid obscure claims, and avoid precise statistics, dates, or numbers unless they are extremely well-known and unlikely to be misremembered, since specific figures are the most common source of subtle errors. " +
+    "If you are not fully confident in a fact, choose a different, simpler fact you are certain about instead, even if it is less surprising. " +
     "Fact requirements: one or two sentences, plain text with no markdown and no surrounding quotation marks. " +
     "Use metric units (kilograms, metres, kilometres, Celsius) rather than imperial units. " +
     "Do not use em dashes; use commas or separate sentences instead. " +
@@ -47,7 +49,6 @@ async function callGeminiOnce(apiKey, prompt) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
-        tools: [{ google_search: {} }],
         generationConfig: {
           temperature: 1.1,
           responseMimeType: "application/json",
