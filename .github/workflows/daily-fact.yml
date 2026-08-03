@@ -20,10 +20,18 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Install dependencies
+        run: npm install google-auth-library
+
       - name: Generate fact
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: node generate-fact.js
+
+      - name: Send notification
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: node send-notification.js
 
       - name: Commit and push fact.json
         run: |
