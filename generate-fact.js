@@ -24,14 +24,17 @@ function pickCategory() {
 }
 
 function buildPrompt(history, category) {
-  let prompt = `Give me one short, true fact from the category of ${category}, suitable for a general audience aged 7 and up. ` +
+  let prompt = `Give me one true fact from the category of ${category}, suitable for a general audience aged 7 and up. ` +
     "Accuracy matters more than anything else here. Only choose a fact you are highly confident is correct, well-established, and would appear consistently across reputable reference sources, such as an encyclopedia or textbook. " +
     "Avoid obscure claims, and avoid precise statistics, dates, or numbers unless they are extremely well-known and unlikely to be misremembered, since specific figures are the most common source of subtle errors. " +
     "If you are not fully confident in a fact, choose a different, simpler fact you are certain about instead, even if it is less surprising. " +
+    "At the same time, avoid facts so basic or commonly taught that most adults already know them; look for something true and verifiable but genuinely less obvious. " +
+    "Presentation matters a lot: state the fact in the most vivid, concrete way possible rather than an abstract, generic, textbook phrasing. Where it fits naturally, anchor it with a real comparison to something familiar (size, time, distance, quantity) rather than stating a number in isolation. " +
+    "For example, instead of 'Honey does not spoil,' prefer something like 'Archaeologists have found pots of honey in ancient Egyptian tombs that are still perfectly edible after 3,000 years.' Same idea, far more vivid and concrete. " +
     "Fact requirements: one or two sentences, plain text with no markdown and no surrounding quotation marks. " +
     "Use metric units (kilograms, metres, kilometres, Celsius) rather than imperial units. " +
     "Do not use em dashes; use commas or separate sentences instead. " +
-    "Do not use exclamation marks in the fact; keep its tone calm and matter-of-fact. " +
+    "Do not use exclamation marks in the fact; keep its tone calm and matter-of-fact, even while being vivid. " +
     "State the fact plainly and confidently; do not use hedging phrases like 'scientists believe' or 'some say'. " +
     "Avoid anything violent, disturbing, or scary. " +
     "Also write a short push notification teaser for this fact: playful and curious in tone (unlike the calm fact itself), under 90 characters, that hints at the fact without revealing the actual answer or detail, to make someone curious enough to open the app. It may include one relevant emoji if it fits naturally, but don't force one. " +
