@@ -36,7 +36,7 @@ function buildPrompt(history, category) {
     "Do not use em dashes; use commas or separate sentences instead. " +
     "Do not use exclamation marks in the fact; keep its tone calm and matter-of-fact, even while being vivid. " +
     "State the fact plainly and confidently; do not use hedging phrases like 'scientists believe' or 'some say'. " +
-    "Avoid anything violent, disturbing, or scary. " +
+    "Avoid anything violent, disturbing, or scary. Avoid any reference to drugs, alcohol, tobacco, or other controlled or illegal substances, even in a purely historical or scientific context. " +
     "Also write a short push notification teaser for this fact: playful and curious in tone (unlike the calm fact itself), under 90 characters, that hints at the fact without revealing the actual answer or detail, to make someone curious enough to open the app. It may include one relevant emoji if it fits naturally, but don't force one. " +
     "For reference, here is an example showing the tone and format we want (do not reuse this exact fact, or anything closely resembling it, as your actual answer; it is only to illustrate style): " +
     `Example fact: "There are more possible unique chess games than there are atoms in the observable universe." ` +
