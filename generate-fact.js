@@ -40,44 +40,33 @@ function buildPrompt(history, category) {
     "Also write a short push notification teaser for this fact: playful and curious in tone (unlike the calm fact itself), under 90 characters, that hints at the fact without revealing the actual answer or detail, to make someone curious enough to open the app. It may include one relevant emoji if it fits naturally, but don't force one. " +
     "For reference, here is an example showing the tone and format we want (do not reuse this exact fact, or anything closely resembling it, as your actual answer; it is only to illustrate style): " +
     `Example fact: "There are more possible unique chess games than there are atoms in the observable universe." ` +
-    `Example notification: "Psst... want to know why a group of ravens is called a murder? 🐦"`;
+    `Example notification: "Psst... want to know why a group of ravens is called a murder? 🐦" ` +
+    `Respond only with valid JSON in exactly this format, no other text before or after: {"fact": "...", "notification": "..."}`;
   if (history.length > 0) {
     prompt += " Do not repeat or closely resemble any of these facts already used recently: " + history.map(h => `"${h}"`).join(", ") + ".";
   }
   return prompt;
 }
 
-async function callGeminiOnce(apiKey, prompt) {
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature: 1.1,
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: "object",
-            properties: {
-              fact: { type: "string" },
-              notification: { type: "string" }
-            },
-            required: ["fact", "notification"]
-          }
-        }
-      })
-    }
-  );
+async function callGroqOnce(apiKey, prompt) {
+  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model: "llama-3.3-70b-versatile",
+      messages: [{ role: "user", content: prompt }],
+      temperature: 1.1,
+      response_format: { type: "json_object" }
+    })
+  });
   const data = await res.json();
   if (!res.ok || data.error) {
-    throw new Error(`Gemini API error (status ${res.status}): ${data.error ? data.error.message : JSON.stringify(data)}`);
+    throw new Error(`Groq API error (status ${res.status}): ${data.error ? data.error.message : JSON.stringify(data)}`);
   }
-  if (!data.candidates || !data.candidates[0] || !data.candidates[0].content) {
-    throw new Error("No usable candidate in response: " + JSON.stringify(data));
-  }
-  const rawText = data.candidates[0].content.parts[0].text.trim();
+  const rawText = data.choices[0].message.content.trim();
   const parsed = JSON.parse(rawText);
   if (!parsed.fact || !parsed.notification) {
     throw new Error("Response missing required fields: " + rawText);
@@ -85,12 +74,12 @@ async function callGeminiOnce(apiKey, prompt) {
   return parsed;
 }
 
-async function callGeminiWithRetries(apiKey, prompt, maxAttempts = 3) {
+async function callGroqWithRetries(apiKey, prompt, maxAttempts = 3) {
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      return await callGeminiOnce(apiKey, prompt);
+      return await callGroqOnce(apiKey, prompt);
     } catch (err) {
-      const isQuotaError = err.message.includes("429") || err.message.includes("quota");
+      const isQuotaError = err.message.includes("429") || err.message.includes("quota") || err.message.includes("rate_limit");
       console.log(`Attempt ${attempt} failed: ${err.message}`);
       if (isQuotaError || attempt === maxAttempts) throw err;
       await new Promise(r => setTimeout(r, 5000 * attempt));
@@ -99,13 +88,13 @@ async function callGeminiWithRetries(apiKey, prompt, maxAttempts = 3) {
 }
 
 async function main() {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error("GEMINI_API_KEY is missing.");
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) throw new Error("GROQ_API_KEY is missing.");
 
   const history = loadHistory();
   const category = pickCategory();
   const prompt = buildPrompt(history, category);
-  const result = await callGeminiWithRetries(apiKey, prompt);
+  const result = await callGroqWithRetries(apiKey, prompt);
   const today = new Date().toISOString().slice(0, 10);
 
   fs.writeFileSync('fact.json', JSON.stringify({
