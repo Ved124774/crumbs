@@ -32,7 +32,7 @@ function buildPrompt(history, category) {
     "Presentation matters a lot: state the fact in the most vivid, concrete way possible rather than an abstract, generic, textbook phrasing. Where it fits naturally, anchor it with a real comparison to something familiar (size, time, distance, quantity) rather than stating a number in isolation. " +
     "For example, instead of 'Honey does not spoil,' prefer something like 'Archaeologists have found pots of honey in ancient Egyptian tombs that are still perfectly edible after 3,000 years.' Same idea, far more vivid and concrete. " +
     "Important: vivid framing must remain literally, physically true, not just true in spirit. Do not describe something as possible if it is not actually physically possible as stated. For example, do not say someone can stand with one foot on two sides of a strait or river that is actually hundreds of metres or kilometres wide, even if the general point (a city or landmark spans two continents or regions) is true. " +
-    "Fact requirements: one or two sentences, plain text with no markdown and no surrounding quotation marks. " +
+    "Fact requirements: one or two sentences, ideally under 150 characters and no more than 160, plain text with no markdown and no surrounding quotation marks. If a vivid comparison would push the fact too long, prefer a slightly simpler phrasing that stays within the limit over a longer, more elaborate one. " +
     "Use metric units (kilograms, metres, kilometres, Celsius) rather than imperial units. " +
     "Do not use em dashes; use commas or separate sentences instead. " +
     "Do not use exclamation marks in the fact; keep its tone calm and matter-of-fact, even while being vivid. " +
