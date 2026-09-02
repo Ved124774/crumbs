@@ -1,6 +1,7 @@
 const fs = require('fs');
 
 const HISTORY_FILE = 'history.json';
+const FACT_FILE = 'fact.json';
 
 const CATEGORIES = [
   "science", "history", "space", "animals", "geography",
@@ -23,16 +24,17 @@ function pickCategory() {
   return CATEGORIES[dayIndex % CATEGORIES.length];
 }
 
-function buildPrompt(history, category) {
+function buildPrompt(history, category, rejectionNote) {
   let prompt = `Give me one true fact from the category of ${category}, suitable for a general audience aged 7 and up. ` +
     "Accuracy matters more than anything else here. Only choose a fact you are highly confident is correct, well-established, and would appear consistently across reputable reference sources, such as an encyclopedia or textbook. " +
     "Avoid obscure claims, and avoid precise statistics, dates, or numbers unless they are extremely well-known and unlikely to be misremembered, since specific figures are the most common source of subtle errors. " +
+    "Pay special attention to comparisons and superlatives (e.g. 'more than X', 'the largest', 'more Y than all Z combined') and to units of measurement (kg vs lbs, metres vs feet) since these are the most common source of small but real errors. " +
     "If you are not fully confident in a fact, choose a different, simpler fact you are certain about instead, even if it is less surprising. " +
     "At the same time, avoid facts so basic or commonly taught that most adults already know them; look for something true and verifiable but genuinely less obvious. " +
     "Presentation matters a lot: state the fact in the most vivid, concrete way possible rather than an abstract, generic, textbook phrasing. Where it fits naturally, anchor it with a real comparison to something familiar (size, time, distance, quantity) rather than stating a number in isolation. " +
     "For example, instead of 'Honey does not spoil,' prefer something like 'Archaeologists have found pots of honey in ancient Egyptian tombs that are still perfectly edible after 3,000 years.' Same idea, far more vivid and concrete. " +
     "Important: vivid framing must remain literally, physically true, not just true in spirit. Do not describe something as possible if it is not actually physically possible as stated. For example, do not say someone can stand with one foot on two sides of a strait or river that is actually hundreds of metres or kilometres wide, even if the general point (a city or landmark spans two continents or regions) is true. " +
-    "Fact requirements: one or two sentences, ideally under 150 characters and no more than 160, plain text with no markdown and no surrounding quotation marks. If a vivid comparison would push the fact too long, prefer a slightly simpler phrasing that stays within the limit over a longer, more elaborate one. " +
+    "Fact requirements: one or two sentences, ideally under 150 characters and no more than 180, plain text with no markdown and no surrounding quotation marks. If a vivid comparison would push the fact too long, prefer a slightly simpler phrasing that stays within the limit over a longer, more elaborate one. " +
     "Use metric units (kilograms, metres, kilometres, Celsius) rather than imperial units. " +
     "Do not use em dashes; use commas or separate sentences instead. " +
     "Do not use exclamation marks in the fact; keep its tone calm and matter-of-fact, even while being vivid. " +
@@ -46,10 +48,13 @@ function buildPrompt(history, category) {
   if (history.length > 0) {
     prompt += " Do not repeat or closely resemble any of these facts already used recently: " + history.map(h => `"${h}"`).join(", ") + ".";
   }
+  if (rejectionNote) {
+    prompt += ` Your previous attempt was rejected as inaccurate: the fact "${rejectionNote.fact}" had this problem: ${rejectionNote.issue}. Choose a completely different fact and avoid this exact kind of error.`;
+  }
   return prompt;
 }
 
-async function callGroqOnce(apiKey, prompt) {
+async function callGroqRaw(apiKey, messages) {
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -58,7 +63,7 @@ async function callGroqOnce(apiKey, prompt) {
     },
     body: JSON.stringify({
       model: "openai/gpt-oss-120b",
-      messages: [{ role: "user", content: prompt }],
+      messages,
       temperature: 1.1,
       response_format: { type: "json_object" }
     })
@@ -67,18 +72,13 @@ async function callGroqOnce(apiKey, prompt) {
   if (!res.ok || data.error) {
     throw new Error(`Groq API error (status ${res.status}): ${data.error ? data.error.message : JSON.stringify(data)}`);
   }
-  const rawText = data.choices[0].message.content.trim();
-  const parsed = JSON.parse(rawText);
-  if (!parsed.fact || !parsed.notification) {
-    throw new Error("Response missing required fields: " + rawText);
-  }
-  return parsed;
+  return JSON.parse(data.choices[0].message.content.trim());
 }
 
-async function callGroqWithRetries(apiKey, prompt, maxAttempts = 3) {
+async function withRetries(fn, maxAttempts = 3) {
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      return await callGroqOnce(apiKey, prompt);
+      return await fn();
     } catch (err) {
       const isQuotaError = err.message.includes("429") || err.message.includes("quota") || err.message.includes("rate_limit");
       console.log(`Attempt ${attempt} failed: ${err.message}`);
@@ -88,17 +88,59 @@ async function callGroqWithRetries(apiKey, prompt, maxAttempts = 3) {
   }
 }
 
+async function generateFact(apiKey, prompt) {
+  const parsed = await withRetries(() => callGroqRaw(apiKey, [{ role: "user", content: prompt }]));
+  if (!parsed.fact || !parsed.notification) {
+    throw new Error("Response missing required fields: " + JSON.stringify(parsed));
+  }
+  return parsed;
+}
+
+async function verifyFact(apiKey, factText) {
+  const verifyPrompt =
+    "You are a strict, skeptical fact-checker. Carefully verify this claim for factual accuracy: " +
+    `"${factText}" ` +
+    "Pay very close attention to: any comparison or superlative (e.g. 'more than X', 'the largest', 'more Y than all Z combined') must be precisely, literally correct, not just roughly true; any units of measurement (kg vs lbs, metres vs feet, etc.) must be exactly correct for the real-world value being described; any specific numbers must be accurate. " +
+    "If the claim contains any error, however small, mark it inaccurate and explain the specific problem. " +
+    `Respond only with valid JSON in exactly this format, no other text: {"accurate": true or false, "issue": "explanation if false, otherwise null"}`;
+  return withRetries(() => callGroqRaw(apiKey, [{ role: "user", content: verifyPrompt }]));
+}
+
+async function generateVerifiedFact(apiKey, history, category, maxRegenerations = 3) {
+  let rejectionNote = null;
+  for (let attempt = 1; attempt <= maxRegenerations; attempt++) {
+    const prompt = buildPrompt(history, category, rejectionNote);
+    const result = await generateFact(apiKey, prompt);
+    console.log(`Generation attempt ${attempt}: "${result.fact}"`);
+
+    const verification = await verifyFact(apiKey, result.fact);
+    if (verification.accurate) {
+      console.log("Verified accurate.");
+      return result;
+    }
+
+    console.log(`Verification failed: ${verification.issue}`);
+    rejectionNote = { fact: result.fact, issue: verification.issue };
+  }
+  return null; // all attempts failed verification
+}
+
 async function main() {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) throw new Error("GROQ_API_KEY is missing.");
 
   const history = loadHistory();
   const category = pickCategory();
-  const prompt = buildPrompt(history, category);
-  const result = await callGroqWithRetries(apiKey, prompt);
   const today = new Date().toISOString().slice(0, 10);
 
-  fs.writeFileSync('fact.json', JSON.stringify({
+  const result = await generateVerifiedFact(apiKey, history, category);
+
+  if (!result) {
+    console.log("No fact passed verification after multiple attempts. Keeping yesterday's fact unchanged.");
+    return;
+  }
+
+  fs.writeFileSync(FACT_FILE, JSON.stringify({
     text: result.fact,
     notification: result.notification,
     date: today
