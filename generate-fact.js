@@ -63,6 +63,7 @@ async function callGroqRaw(apiKey, messages, maxTokens) {
       messages,
       temperature: 1.1,
       max_completion_tokens: maxTokens,
+      reasoning_effort: "low",
       response_format: { type: "json_object" }
     })
   });
@@ -89,7 +90,7 @@ async function withRetries(fn, maxAttempts = 4) {
 }
 
 async function generateFact(apiKey, prompt) {
-  const parsed = await withRetries(() => callGroqRaw(apiKey, [{ role: "user", content: prompt }], 300));
+  const parsed = await withRetries(() => callGroqRaw(apiKey, [{ role: "user", content: prompt }], 700));
   if (!parsed.fact || !parsed.notification) {
     throw new Error("Response missing required fields: " + JSON.stringify(parsed));
   }
@@ -103,7 +104,7 @@ async function verifyFact(apiKey, factText) {
     "Check especially: comparisons/superlatives must be precisely correct, not roughly true; units must be exactly correct (kg vs lbs, metres vs feet); numbers must be accurate; the claim must not combine two separate real things into one false combined claim. " +
     "Keep your explanation to one short sentence, maximum 15 words. " +
     `Respond only with valid JSON, no other text: {"accurate": true or false, "issue": "brief reason if false, otherwise null"}`;
-  return withRetries(() => callGroqRaw(apiKey, [{ role: "user", content: verifyPrompt }], 100));
+  return withRetries(() => callGroqRaw(apiKey, [{ role: "user", content: verifyPrompt }], 300));
 }
 
 async function generateVerifiedFact(apiKey, history, category, maxRegenerations = 3) {
