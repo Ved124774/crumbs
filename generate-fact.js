@@ -2,6 +2,7 @@ const fs = require('fs');
 
 const HISTORY_FILE = 'history.json';
 const FACT_FILE = 'fact.json';
+const MAX_FACT_LENGTH = 190;
 
 const CATEGORIES = [
   "science", "history", "space", "animals", "geography",
@@ -26,35 +27,31 @@ function pickCategory() {
 
 function buildPrompt(history, category, rejectionNote) {
   let prompt = `Give me one true fact from the category of ${category}, suitable for a general audience aged 7 and up. ` +
+    "HARD LENGTH LIMIT: the fact must be under 150 characters. This is a strict requirement, not a suggestion; a fact over 150 characters will be rejected automatically regardless of how good it is. Count carefully before answering. " +
     "Accuracy matters more than anything else here. Only choose a fact you are highly confident is correct, well-established, and would appear consistently across reputable reference sources, such as an encyclopedia or textbook. " +
     "Avoid obscure claims, and avoid precise statistics, dates, or numbers unless they are extremely well-known and unlikely to be misremembered, since specific figures are the most common source of subtle errors. " +
     "Pay special attention to comparisons and superlatives (e.g. 'more than X', 'the largest', 'more Y than all Z combined') and to units of measurement (kg vs lbs, metres vs feet) since these are the most common source of small but real errors. " +
+    "Do not combine two separate real techniques or facts into one claim that implies they happened together, unless that combination is itself well documented. " +
     "If you are not fully confident in a fact, choose a different, simpler fact you are certain about instead, even if it is less surprising. " +
     "At the same time, avoid facts so basic or commonly taught that most adults already know them; look for something true and verifiable but genuinely less obvious. " +
-    "Presentation matters a lot: state the fact in the most vivid, concrete way possible rather than an abstract, generic, textbook phrasing. Where it fits naturally, anchor it with a real comparison to something familiar (size, time, distance, quantity) rather than stating a number in isolation. " +
-    "For example, instead of 'Honey does not spoil,' prefer something like 'Archaeologists have found pots of honey in ancient Egyptian tombs that are still perfectly edible after 3,000 years.' Same idea, far more vivid and concrete. " +
-    "Important: vivid framing must remain literally, physically true, not just true in spirit. Do not describe something as possible if it is not actually physically possible as stated. For example, do not say someone can stand with one foot on two sides of a strait or river that is actually hundreds of metres or kilometres wide, even if the general point (a city or landmark spans two continents or regions) is true. " +
-    "Fact requirements: one or two sentences, ideally under 150 characters and no more than 180, plain text with no markdown and no surrounding quotation marks. If a vivid comparison would push the fact too long, prefer a slightly simpler phrasing that stays within the limit over a longer, more elaborate one. " +
-    "Use metric units (kilograms, metres, kilometres, Celsius) rather than imperial units. " +
-    "Do not use em dashes; use commas or separate sentences instead. " +
-    "Do not use exclamation marks in the fact; keep its tone calm and matter-of-fact, even while being vivid. " +
+    "Presentation matters, within the length limit: prefer a vivid, concrete phrasing over an abstract, generic one, but never let vividness push you over 150 characters; a shorter, simpler true fact is always better than a longer, more elaborate one. " +
+    "Important: vivid framing must remain literally, physically true, not just true in spirit. " +
+    "Plain text only, no markdown, no surrounding quotation marks. Use metric units (kilograms, metres, kilometres, Celsius) rather than imperial units. " +
+    "Do not use em dashes; use commas or separate sentences instead. Do not use exclamation marks; keep the tone calm and matter-of-fact. " +
     "State the fact plainly and confidently; do not use hedging phrases like 'scientists believe' or 'some say'. " +
     "Avoid anything violent, disturbing, or scary. Avoid any reference to drugs, alcohol, tobacco, or other controlled or illegal substances, even in a purely historical or scientific context. " +
-    "Also write a short push notification teaser for this fact: playful and curious in tone (unlike the calm fact itself), under 90 characters, that hints at the fact without revealing the actual answer or detail, to make someone curious enough to open the app. It may include one relevant emoji if it fits naturally, but don't force one. " +
-    "For reference, here is an example showing the tone and format we want (do not reuse this exact fact, or anything closely resembling it, as your actual answer; it is only to illustrate style): " +
-    `Example fact: "There are more possible unique chess games than there are atoms in the observable universe." ` +
-    `Example notification: "Psst... want to know why a group of ravens is called a murder? 🐦" ` +
+    "Also write a short push notification teaser: playful and curious in tone, under 90 characters, that hints at the fact without revealing the answer, to make someone curious enough to open the app. One relevant emoji is fine if it fits naturally, but don't force one. " +
     `Respond only with valid JSON in exactly this format, no other text before or after: {"fact": "...", "notification": "..."}`;
   if (history.length > 0) {
     prompt += " Do not repeat or closely resemble any of these facts already used recently: " + history.map(h => `"${h}"`).join(", ") + ".";
   }
   if (rejectionNote) {
-    prompt += ` Your previous attempt was rejected as inaccurate: the fact "${rejectionNote.fact}" had this problem: ${rejectionNote.issue}. Choose a completely different fact and avoid this exact kind of error.`;
+    prompt += ` Your previous attempt was rejected: the fact "${rejectionNote.fact}" had this problem: ${rejectionNote.issue}. Choose a different fact and avoid this exact kind of error.`;
   }
   return prompt;
 }
 
-async function callGroqRaw(apiKey, messages) {
+async function callGroqRaw(apiKey, messages, maxTokens) {
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -65,6 +62,7 @@ async function callGroqRaw(apiKey, messages) {
       model: "openai/gpt-oss-120b",
       messages,
       temperature: 1.1,
+      max_completion_tokens: maxTokens,
       response_format: { type: "json_object" }
     })
   });
@@ -75,21 +73,23 @@ async function callGroqRaw(apiKey, messages) {
   return JSON.parse(data.choices[0].message.content.trim());
 }
 
-async function withRetries(fn, maxAttempts = 3) {
+async function withRetries(fn, maxAttempts = 4) {
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       return await fn();
     } catch (err) {
-      const isQuotaError = err.message.includes("429") || err.message.includes("quota") || err.message.includes("rate_limit");
+      const isRateLimit = err.message.includes("rate_limit") || err.message.includes("tokens per minute") || err.message.includes("TPM") || err.message.includes("429");
       console.log(`Attempt ${attempt} failed: ${err.message}`);
-      if (isQuotaError || attempt === maxAttempts) throw err;
-      await new Promise(r => setTimeout(r, 5000 * attempt));
+      if (!isRateLimit || attempt === maxAttempts) throw err;
+      const waitSeconds = 20 * attempt;
+      console.log(`Rate limit hit, waiting ${waitSeconds}s before retrying...`);
+      await new Promise(r => setTimeout(r, waitSeconds * 1000));
     }
   }
 }
 
 async function generateFact(apiKey, prompt) {
-  const parsed = await withRetries(() => callGroqRaw(apiKey, [{ role: "user", content: prompt }]));
+  const parsed = await withRetries(() => callGroqRaw(apiKey, [{ role: "user", content: prompt }], 300));
   if (!parsed.fact || !parsed.notification) {
     throw new Error("Response missing required fields: " + JSON.stringify(parsed));
   }
@@ -98,12 +98,12 @@ async function generateFact(apiKey, prompt) {
 
 async function verifyFact(apiKey, factText) {
   const verifyPrompt =
-    "You are a strict, skeptical fact-checker. Carefully verify this claim for factual accuracy: " +
+    "You are a strict, skeptical fact-checker. Verify this claim: " +
     `"${factText}" ` +
-    "Pay very close attention to: any comparison or superlative (e.g. 'more than X', 'the largest', 'more Y than all Z combined') must be precisely, literally correct, not just roughly true; any units of measurement (kg vs lbs, metres vs feet, etc.) must be exactly correct for the real-world value being described; any specific numbers must be accurate. " +
-    "If the claim contains any error, however small, mark it inaccurate and explain the specific problem. " +
-    `Respond only with valid JSON in exactly this format, no other text: {"accurate": true or false, "issue": "explanation if false, otherwise null"}`;
-  return withRetries(() => callGroqRaw(apiKey, [{ role: "user", content: verifyPrompt }]));
+    "Check especially: comparisons/superlatives must be precisely correct, not roughly true; units must be exactly correct (kg vs lbs, metres vs feet); numbers must be accurate; the claim must not combine two separate real things into one false combined claim. " +
+    "Keep your explanation to one short sentence, maximum 15 words. " +
+    `Respond only with valid JSON, no other text: {"accurate": true or false, "issue": "brief reason if false, otherwise null"}`;
+  return withRetries(() => callGroqRaw(apiKey, [{ role: "user", content: verifyPrompt }], 100));
 }
 
 async function generateVerifiedFact(apiKey, history, category, maxRegenerations = 3) {
@@ -111,7 +111,13 @@ async function generateVerifiedFact(apiKey, history, category, maxRegenerations 
   for (let attempt = 1; attempt <= maxRegenerations; attempt++) {
     const prompt = buildPrompt(history, category, rejectionNote);
     const result = await generateFact(apiKey, prompt);
-    console.log(`Generation attempt ${attempt}: "${result.fact}"`);
+    console.log(`Generation attempt ${attempt}: "${result.fact}" (${result.fact.length} chars)`);
+
+    if (result.fact.length > MAX_FACT_LENGTH) {
+      console.log(`Rejected: too long (${result.fact.length} chars, max ${MAX_FACT_LENGTH})`);
+      rejectionNote = { fact: result.fact, issue: `too long at ${result.fact.length} characters, must be under 150` };
+      continue;
+    }
 
     const verification = await verifyFact(apiKey, result.fact);
     if (verification.accurate) {
@@ -122,7 +128,7 @@ async function generateVerifiedFact(apiKey, history, category, maxRegenerations 
     console.log(`Verification failed: ${verification.issue}`);
     rejectionNote = { fact: result.fact, issue: verification.issue };
   }
-  return null; // all attempts failed verification
+  return null;
 }
 
 async function main() {
