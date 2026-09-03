@@ -2,7 +2,7 @@ const fs = require('fs');
 
 const HISTORY_FILE = 'history.json';
 const FACT_FILE = 'fact.json';
-const MAX_FACT_LENGTH = 190;
+const MAX_FACT_LENGTH = 160;
 
 const CATEGORIES = [
   "science", "history", "space", "animals", "geography",
