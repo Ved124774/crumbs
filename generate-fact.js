@@ -2,7 +2,7 @@ const fs = require('fs');
 
 const HISTORY_FILE = 'history.json';
 const FACT_FILE = 'fact.json';
-const MAX_FACT_LENGTH = 160;
+const MAX_FACT_LENGTH = 150;
 
 const CATEGORIES = [
   "science", "history", "space", "animals", "geography",
@@ -23,6 +23,12 @@ function loadHistory() {
 function pickCategory() {
   const dayIndex = Math.floor(Date.now() / 86400000);
   return CATEGORIES[dayIndex % CATEGORIES.length];
+}
+
+function isExactRepeat(factText, history) {
+  const normalize = s => s.trim().toLowerCase().replace(/[.,!?]/g, '');
+  const normalizedFact = normalize(factText);
+  return history.some(h => normalize(h) === normalizedFact);
 }
 
 function buildPrompt(history, category, rejectionNote) {
@@ -107,7 +113,19 @@ async function verifyFact(apiKey, factText) {
   return withRetries(() => callGroqRaw(apiKey, [{ role: "user", content: verifyPrompt }], 300));
 }
 
-async function generateVerifiedFact(apiKey, history, category, maxRegenerations = 3) {
+async function checkDuplicate(apiKey, factText, history) {
+  if (history.length === 0) return { is_duplicate: false };
+  const checkPrompt =
+    "Compare this new fact against a list of recently used facts. " +
+    `New fact: "${factText}" ` +
+    "Recently used facts: " + history.map(h => `"${h}"`).join(", ") + ". " +
+    "Is the new fact the same underlying fact as any of these, or a close rewording of one, even if the phrasing is different? Focus on whether the core piece of information is the same, not just whether the wording matches. " +
+    "Keep any explanation to one short sentence, maximum 12 words. " +
+    `Respond only with valid JSON, no other text: {"is_duplicate": true or false, "matched": "the matching fact if true, otherwise null"}`;
+  return withRetries(() => callGroqRaw(apiKey, [{ role: "user", content: checkPrompt }], 300));
+}
+
+async function generateVerifiedFact(apiKey, history, category, maxRegenerations = 4) {
   let rejectionNote = null;
   for (let attempt = 1; attempt <= maxRegenerations; attempt++) {
     const prompt = buildPrompt(history, category, rejectionNote);
@@ -120,9 +138,22 @@ async function generateVerifiedFact(apiKey, history, category, maxRegenerations 
       continue;
     }
 
+    if (isExactRepeat(result.fact, history)) {
+      console.log("Rejected: exact repeat of a past fact.");
+      rejectionNote = { fact: result.fact, issue: "this is an exact repeat of a fact already used before" };
+      continue;
+    }
+
+    const dupCheck = await checkDuplicate(apiKey, result.fact, history);
+    if (dupCheck.is_duplicate) {
+      console.log(`Rejected: near-duplicate of "${dupCheck.matched}"`);
+      rejectionNote = { fact: result.fact, issue: `too similar to a previously used fact: "${dupCheck.matched}"` };
+      continue;
+    }
+
     const verification = await verifyFact(apiKey, result.fact);
     if (verification.accurate) {
-      console.log("Verified accurate.");
+      console.log("Verified accurate and not a duplicate.");
       return result;
     }
 
@@ -143,7 +174,7 @@ async function main() {
   const result = await generateVerifiedFact(apiKey, history, category);
 
   if (!result) {
-    console.log("No fact passed verification after multiple attempts. Keeping yesterday's fact unchanged.");
+    console.log("No fact passed checks after multiple attempts. Keeping yesterday's fact unchanged.");
     return;
   }
 
