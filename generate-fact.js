@@ -9,6 +9,48 @@ const CATEGORIES = [
   "the human body", "technology", "the ocean", "ancient civilizations", "language and words"
 ];
 
+const FACT_SCHEMA = {
+  name: "fact_response",
+  strict: true,
+  schema: {
+    type: "object",
+    properties: {
+      fact: { type: "string" },
+      notification: { type: "string" }
+    },
+    required: ["fact", "notification"],
+    additionalProperties: false
+  }
+};
+
+const VERIFY_SCHEMA = {
+  name: "verify_response",
+  strict: true,
+  schema: {
+    type: "object",
+    properties: {
+      accurate: { type: "boolean" },
+      issue: { type: ["string", "null"] }
+    },
+    required: ["accurate", "issue"],
+    additionalProperties: false
+  }
+};
+
+const DUPLICATE_SCHEMA = {
+  name: "duplicate_response",
+  strict: true,
+  schema: {
+    type: "object",
+    properties: {
+      is_duplicate: { type: "boolean" },
+      matched: { type: ["string", "null"] }
+    },
+    required: ["is_duplicate", "matched"],
+    additionalProperties: false
+  }
+};
+
 function loadHistory() {
   if (fs.existsSync(HISTORY_FILE)) {
     try {
@@ -46,8 +88,7 @@ function buildPrompt(history, category, rejectionNote) {
     "Do not use em dashes; use commas or separate sentences instead. Do not use exclamation marks; keep the tone calm and matter-of-fact. " +
     "State the fact plainly and confidently; do not use hedging phrases like 'scientists believe' or 'some say'. " +
     "Avoid anything violent, disturbing, or scary. Avoid any reference to drugs, alcohol, tobacco, or other controlled or illegal substances, even in a purely historical or scientific context. " +
-    "Also write a short push notification teaser: playful and curious in tone, under 90 characters, that hints at the fact without revealing the answer, to make someone curious enough to open the app. One relevant emoji is fine if it fits naturally, but don't force one. " +
-    `Respond only with valid JSON in exactly this format, no other text before or after: {"fact": "...", "notification": "..."}`;
+    "Also write a short push notification teaser: playful and curious in tone, under 90 characters, that hints at the fact without revealing the answer, to make someone curious enough to open the app. One relevant emoji is fine if it fits naturally, but don't force one.";
   if (history.length > 0) {
     prompt += " Do not repeat or closely resemble any of these facts already used recently: " + history.map(h => `"${h}"`).join(", ") + ".";
   }
@@ -57,7 +98,7 @@ function buildPrompt(history, category, rejectionNote) {
   return prompt;
 }
 
-async function callGroqRaw(apiKey, messages, maxTokens) {
+async function callGroqRaw(apiKey, messages, maxTokens, schema) {
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -70,7 +111,7 @@ async function callGroqRaw(apiKey, messages, maxTokens) {
       temperature: 1.1,
       max_completion_tokens: maxTokens,
       reasoning_effort: "low",
-      response_format: { type: "json_object" }
+      response_format: { type: "json_schema", json_schema: schema }
     })
   });
   const data = await res.json();
@@ -96,7 +137,7 @@ async function withRetries(fn, maxAttempts = 4) {
 }
 
 async function generateFact(apiKey, prompt) {
-  const parsed = await withRetries(() => callGroqRaw(apiKey, [{ role: "user", content: prompt }], 700));
+  const parsed = await withRetries(() => callGroqRaw(apiKey, [{ role: "user", content: prompt }], 700, FACT_SCHEMA));
   if (!parsed.fact || !parsed.notification) {
     throw new Error("Response missing required fields: " + JSON.stringify(parsed));
   }
@@ -108,21 +149,19 @@ async function verifyFact(apiKey, factText) {
     "You are a strict, skeptical fact-checker. Verify this claim: " +
     `"${factText}" ` +
     "Check especially: comparisons/superlatives must be precisely correct, not roughly true; units must be exactly correct (kg vs lbs, metres vs feet); numbers must be accurate; the claim must not combine two separate real things into one false combined claim. " +
-    "Keep your explanation to one short sentence, maximum 15 words. " +
-    `Respond only with valid JSON, no other text: {"accurate": true or false, "issue": "brief reason if false, otherwise null"}`;
-  return withRetries(() => callGroqRaw(apiKey, [{ role: "user", content: verifyPrompt }], 300));
+    "If accurate, set issue to null. Otherwise keep the issue explanation to one short sentence, maximum 15 words.";
+  return withRetries(() => callGroqRaw(apiKey, [{ role: "user", content: verifyPrompt }], 300, VERIFY_SCHEMA));
 }
 
 async function checkDuplicate(apiKey, factText, history) {
-  if (history.length === 0) return { is_duplicate: false };
+  if (history.length === 0) return { is_duplicate: false, matched: null };
   const checkPrompt =
     "Compare this new fact against a list of recently used facts. " +
     `New fact: "${factText}" ` +
     "Recently used facts: " + history.map(h => `"${h}"`).join(", ") + ". " +
     "Is the new fact the same underlying fact as any of these, or a close rewording of one, even if the phrasing is different? Focus on whether the core piece of information is the same, not just whether the wording matches. " +
-    "Keep any explanation to one short sentence, maximum 12 words. " +
-    `Respond only with valid JSON, no other text: {"is_duplicate": true or false, "matched": "the matching fact if true, otherwise null"}`;
-  return withRetries(() => callGroqRaw(apiKey, [{ role: "user", content: checkPrompt }], 300));
+    "If it is a duplicate, set matched to the matching fact, kept under 12 words. Otherwise set matched to null.";
+  return withRetries(() => callGroqRaw(apiKey, [{ role: "user", content: checkPrompt }], 300, DUPLICATE_SCHEMA));
 }
 
 async function generateVerifiedFact(apiKey, history, category, maxRegenerations = 4) {
