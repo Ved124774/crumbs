@@ -98,6 +98,17 @@ function buildPrompt(history, category, rejectionNote) {
   return prompt;
 }
 
+function buildSafeFallbackPrompt(history, category) {
+  let prompt = `Give me one extremely well-known, widely documented, simple true fact from the category of ${category}, suitable for a general audience aged 7 and up. ` +
+    "This is a fallback request: prioritize certainty and simplicity far above novelty or vividness. Choose something that would appear identically in almost any encyclopedia, with no room for ambiguity, no comparisons, no superlatives, and no precise numbers. " +
+    "Keep it under 150 characters, one sentence if possible. Plain text, no markdown, no quotation marks. Use metric units. No em dashes, no exclamation marks. " +
+    "Also write a short, calm push notification teaser under 90 characters that hints at the fact without revealing it.";
+  if (history.length > 0) {
+    prompt += " Avoid repeating these recent facts: " + history.slice(-15).map(h => `"${h}"`).join(", ") + ".";
+  }
+  return prompt;
+}
+
 async function callGroqRaw(apiKey, messages, maxTokens, schema) {
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
@@ -164,42 +175,67 @@ async function checkDuplicate(apiKey, factText, history) {
   return withRetries(() => callGroqRaw(apiKey, [{ role: "user", content: checkPrompt }], 300, DUPLICATE_SCHEMA));
 }
 
-async function generateVerifiedFact(apiKey, history, category, maxRegenerations = 4) {
+async function tryOneCandidate(apiKey, prompt, history) {
+  const result = await generateFact(apiKey, prompt);
+  console.log(`Candidate: "${result.fact}" (${result.fact.length} chars)`);
+
+  if (result.fact.length > MAX_FACT_LENGTH) {
+    return { ok: false, result, issue: `too long at ${result.fact.length} characters, must be under 150` };
+  }
+  if (isExactRepeat(result.fact, history)) {
+    return { ok: false, result, issue: "this is an exact repeat of a fact already used before" };
+  }
+  const dupCheck = await checkDuplicate(apiKey, result.fact, history);
+  if (dupCheck.is_duplicate) {
+    return { ok: false, result, issue: `too similar to a previously used fact: "${dupCheck.matched}"` };
+  }
+  const verification = await verifyFact(apiKey, result.fact);
+  if (!verification.accurate) {
+    return { ok: false, result, issue: verification.issue };
+  }
+  return { ok: true, result };
+}
+
+async function generateVerifiedFact(apiKey, history, category, maxRegenerations = 6) {
   let rejectionNote = null;
   for (let attempt = 1; attempt <= maxRegenerations; attempt++) {
+    console.log(`--- Attempt ${attempt} of ${maxRegenerations} ---`);
     const prompt = buildPrompt(history, category, rejectionNote);
-    const result = await generateFact(apiKey, prompt);
-    console.log(`Generation attempt ${attempt}: "${result.fact}" (${result.fact.length} chars)`);
-
-    if (result.fact.length > MAX_FACT_LENGTH) {
-      console.log(`Rejected: too long (${result.fact.length} chars, max ${MAX_FACT_LENGTH})`);
-      rejectionNote = { fact: result.fact, issue: `too long at ${result.fact.length} characters, must be under 150` };
-      continue;
-    }
-
-    if (isExactRepeat(result.fact, history)) {
-      console.log("Rejected: exact repeat of a past fact.");
-      rejectionNote = { fact: result.fact, issue: "this is an exact repeat of a fact already used before" };
-      continue;
-    }
-
-    const dupCheck = await checkDuplicate(apiKey, result.fact, history);
-    if (dupCheck.is_duplicate) {
-      console.log(`Rejected: near-duplicate of "${dupCheck.matched}"`);
-      rejectionNote = { fact: result.fact, issue: `too similar to a previously used fact: "${dupCheck.matched}"` };
-      continue;
-    }
-
-    const verification = await verifyFact(apiKey, result.fact);
-    if (verification.accurate) {
+    const outcome = await tryOneCandidate(apiKey, prompt, history);
+    if (outcome.ok) {
       console.log("Verified accurate and not a duplicate.");
-      return result;
+      return outcome.result;
     }
-
-    console.log(`Verification failed: ${verification.issue}`);
-    rejectionNote = { fact: result.fact, issue: verification.issue };
+    console.log(`Rejected: ${outcome.issue}`);
+    rejectionNote = { fact: outcome.result.fact, issue: outcome.issue };
   }
+
+  console.log("--- Normal attempts exhausted, trying safe fallback ---");
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const prompt = buildSafeFallbackPrompt(history, category);
+    const outcome = await tryOneCandidate(apiKey, prompt, history);
+    if (outcome.ok) {
+      console.log("Fallback fact verified.");
+      return outcome.result;
+    }
+    console.log(`Fallback rejected: ${outcome.issue}`);
+  }
+
   return null;
+}
+
+// If everything above fails, reach back into history rather than repeat
+// yesterday's fact. Picks something from at least ~14 entries back if
+// there's enough history, so it reads as "an old favorite" rather than
+// a suspicious back-to-back repeat.
+function pickOldFactForRecycling(history) {
+  if (history.length === 0) return null;
+  const minBack = 14;
+  if (history.length > minBack) {
+    const pool = history.slice(0, history.length - minBack);
+    return pool[Math.floor(Math.random() * pool.length)];
+  }
+  return history[0];
 }
 
 async function main() {
@@ -213,7 +249,15 @@ async function main() {
   const result = await generateVerifiedFact(apiKey, history, category);
 
   if (!result) {
-    console.log("No fact passed checks after multiple attempts. Keeping yesterday's fact unchanged.");
+    console.log("No fact passed checks even with fallback. Recycling an older fact instead of repeating yesterday's.");
+    const recycled = pickOldFactForRecycling(history);
+    const text = recycled || "Here's a fact: today's new one is taking a little longer than usual.";
+    fs.writeFileSync(FACT_FILE, JSON.stringify({
+      text,
+      notification: "Today's fact is ready for you.",
+      date: today
+    }, null, 2));
+    console.log("Recycled fact for", today, ":", text);
     return;
   }
 
